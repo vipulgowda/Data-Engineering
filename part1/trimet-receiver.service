@@ -1,0 +1,11 @@
+[Unit]
+Description=Trimet service
+After=multi-user.target
+[Service]
+Type=simple
+Restart=always
+Environment=GOOGLE_APPLICATION_CREDENTIALS=/home/<USER>/secrets/application_credentials.json
+Environment=GOOGLE_CLOUD_SCOPE=https://www.googleapis.com/auth/pubsub
+ExecStart=/home/<USER>/dataeng-project/env/bin/python3 /home/<USER>/dataeng-project/pub-sub/receiver.py
+[Install]
+WantedBy=multi-user.target

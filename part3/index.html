@@ -26,7 +26,7 @@
     <h3>Python SimpleHTTPServer</h3>
     <div id='map'></div>
     <script>
-        mapboxgl.accessToken = 'pk.eyJ1IjoidmlwdWxwZ293ZGEiLCJhIjoiY2x3aWpxOXZ5MHJ4MzJybXdoYXdkMHJlZCJ9.XXRGWiasseNQ1bryme30xg';
+        mapboxgl.accessToken = '<INSERT ACCESS TOKEN>';
         var map = new mapboxgl.Map({
             container: 'map',
             style: 'mapbox://styles/mapbox/dark-v10',
@@ -37,8 +37,20 @@
         map.on('load', function () {
             map.addSource('speeds', {
                 type: 'geojson',
-                data: 'data.geojson'
+                data: 'viz5c.geojson'
             });
+            //map.addSource('speeds',{
+            //  type: 'geojson',
+            //  data: 'viz2.geojson'
+            //});
+            //map.addSource('speeds', {
+            //   type: 'geojson',
+            //   data: 'viz3.geojson'
+            //   })
+            //map.addSource('speeds',{
+            //  type:'geojson',
+            //  data: 'viz4.geojson'
+            //  });
 
             map.addLayer({
                 id: 'speeds-point',

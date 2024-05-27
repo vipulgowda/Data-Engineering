@@ -3,7 +3,7 @@ import csv, json
 from geojson import Feature, FeatureCollection, Point
 features = []
 
-with open('output.tsv', newline='') as csvfile:
+with open('viz5b.tsv', newline='') as csvfile:
     reader = csv.reader(csvfile, delimiter='\t')
     data = csvfile.readlines()
     for line in data[1:len(data)-1]:
@@ -32,5 +32,5 @@ with open('output.tsv', newline='') as csvfile:
             continue
 
 collection = FeatureCollection(features)
-with open("data.geojson", "w") as f:
+with open("viz5b.geojson", "w") as f:
     f.write('%s' % collection)

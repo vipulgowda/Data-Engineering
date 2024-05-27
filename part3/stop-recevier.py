@@ -20,7 +20,6 @@ json_list = []
 
 def callback(message: pubsub_v1.subscriber.message.Message) -> None:
     json_message = json.loads(message.data.decode('utf-8'))
-    print(json_message)
     json_list.append(json_message)
     message.ack()
 
@@ -31,249 +30,153 @@ print(f"Listening for messages on {subscription_path}..\n")
 
 with subscriber:
     try:
-        streaming_pull_future.result(timeout=20.0)
+        streaming_pull_future.result(timeout=5.0)
     except TimeoutError:
         streaming_pull_future.cancel()
         streaming_pull_future.result()
 
-print(json_list)
 
-# #############################################
-# #                                           #
-# #                 Milesone 2                #
-# #                                           #
-# #############################################
+#############################################
+#                                           #
+#                 Milesone 2                #
+#                                           #
+#############################################
+df = pd.DataFrame(json_list)
 
-# df = pd.DataFrame(json_list)
+# Get the length of the DataFrame
+length = len(df)
 
-# # Get the length of the DataFrame
-# length = len(df)
-
-# if length > 0:
-# #############################################
-# #                                           #
-# #             Data Validation               #
-# #                                           #
-# #############################################
-#     # Check if 'METERS' column contains only positive integers
-#     if df['METERS'].dtype != 'int64':
-#         print("METERS column should contain integers")
-#     elif not (df['METERS'] >= 0).all():
-#         print("METERS column should be non-negative")
-#     else:
-#         print("METERS column are integers and non-negative.")
+if length > 0:
+    # Define function to create timestamp
+    def create_timestamp(row, time_type):
+        opd_date = datetime.strptime(row['timestamp'], '%d%b%Y:%H:%M:%S')
+        converted_time = timedelta(seconds=row[time_type])
+        timestamp = opd_date + converted_time
+        return pd.Timestamp(timestamp)
     
-#     print("Ran Assertion #1 successfully")
-
-#     # Check for missing values in any column
-#     if df.isnull().values.any():
-#         print("There are missing values in the dataset.")
-#     else:
-#         print("No missing values found in any column.")
+    # Apply the function to create the TIMESTAMP column
+    df['stop_time'] = df.apply(create_timestamp, axis=1,args=('stop_time',))
+    df['leave_time'] = df.apply(create_timestamp, axis=1,args=('leave_time',))
+    df['arrive_time'] = df.apply(create_timestamp, axis=1,args=('arrive_time',))
     
-#     print("Ran Assertion #2 successfully")
-
-#     # Check if GPS_LONGITUDE values are within the range [-180, 180]
-#     if not df['GPS_LONGITUDE'].between(-180, 180).all():
-#         print("Some GPS_LONGITUDE values are not within the range [-180, 180].")
-#     else:
-#         print("All GPS_LONGITUDE values are within the range [-180, 180].")
+    df["vehicle_id"] = df["vehicle_number"]
+    df["route_id"] = df["route_number"]
     
-#     print("Ran Assertion #3 successfully")
-
-#     # Check if GPS_LATITUDE values are within the range [-90, 90]
-#     if not df['GPS_LATITUDE'].between(-90, 90).all():
-#         print("Some GPS_LATITUDE values are not within the range [-90, 90].")
-#     else:
-#         print("All GPS_LATITUDE values are within the range [-90, 90].")
+    df["direction"] = df['direction'].map({1: 'Out', 0: 'Back'})
+    df['service_key'] = df['service_key'].map({'U': 'Sunday', 'S': 'Saturday', 'W': 'Weekday'})
     
-#     print("Ran Assertion #4 successfully")
-
-#     # Check for duplicate rows
-#     duplicate_rows = df[df.duplicated()]
-#     if duplicate_rows.empty:
-#         print("There are no duplicate rows in the dataset.")
-#     else:
-#         print("Duplicate rows found in the dataset:")
-#         print(duplicate_rows)
+    df = df[['vehicle_number', 'trip_id', 'stop_time','leave_time', 'arrive_time', 'route_id','direction', 'service_key',  "maximum_speed",  "train_mileage", "dwell", "location_id", "door", "lift", "ons", "offs","estimated_load"]]
     
-#     print("Ran Assertion #5 successfully")
+    # Adjust display options to show all columns and their content
+    pd.set_option('display.max_columns', None)
+    pd.set_option('display.expand_frame_repr', False)  # Prevent line wrapping of DataFrame
 
-#     # Check for missing values in GPS_LONGITUDE and GPS_LATITUDE columns
-#     missing_longitude = df['GPS_LONGITUDE'].isnull().any()
-#     missing_latitude = df['GPS_LATITUDE'].isnull().any()
-
-#     if missing_longitude or missing_latitude:
-#         print("Null GPS_LATITUDE or GPS_LATITUDE values found.")
-#     else:
-#         print("No Null GPS_LONGITUDE or GPS_LATITUDE values found.")
-
-#     print("Ran Assertion #6 successfully")
-
-#     # Group the DataFrame by VEHICLE_ID and check if both Event_No_Trip and Event_No_Stop exist for each group
-#     grouped = df.groupby('VEHICLE_ID')
-#     for vehicle_id, group in grouped:
-#         has_event_no_trip = 'EVENT_NO_TRIP' in group.columns
-#         has_event_no_stop = 'EVENT_NO_STOP' in group.columns
-#         if not (has_event_no_trip and has_event_no_stop):
-#             print(f"Missing Event_No_Trip or Event_No_Stop data for Vehicle ID {vehicle_id}.")
-
-#     print("Ran Assertion #7 successfully")
+    print(df.head())
+    # Establish a connection to the database
+    conn = psycopg2.connect(
+        host="localhost",
+        database=DBname,
+        user=DBuser,
+        password=DBpwd
+    )
     
-#     # Group the DataFrame by 'VEHICLE_ID' and 'OPD_DATE'
-#     grouped = df.groupby(['VEHICLE_ID', 'OPD_DATE'])
+    update_query = "UPDATE trip SET route_id="
 
-#     # Check if each group has only one unique date
-#     for (vehicle_id, opd_date), group in grouped:
-#         if len(group['OPD_DATE'].unique()) != 1:
-#             print(f"Vehicle ID {vehicle_id} on {opd_date.date()} has data with different dates.")
-    
-#     print("Ran Assertion #8 successfully")
+    def copy_from_stop(conn, df):
+        """
+        Here we are going save the dataframe in memory 
+        and use copy_from() to copy it to the table
+        """
+        # save dataframe to an in memory buffer
+        buffer = StringIO()
+        df.to_csv(buffer, index=False, header=False)
+        buffer.seek(0)
 
-#     grouped = df.groupby('VEHICLE_ID')
-#     # Check if any row violates the condition
-#     violation_found = False
-#     for index, row in df.iterrows():
-#         if row['GPS_HDOP'] > 10:
-#             violation_found = True
-#             break  # Exit the loop once a violation is found
+        cursor = conn.cursor()
+        try:
+            cursor.copy_from(buffer, 'stop', sep=",")
+            conn.commit()
+        except (Exception, psycopg2.DatabaseError) as error:
+            print("Error: %s" % error)
+            conn.rollback()
+            cursor.close()
+            return 1
+        print("Loading of Stop table completed")
+        cursor.close()
 
-#     # Print assertion result based on violation flag
-#     if violation_found:
-#         print("Assertion failed: There are rows where GPS_HDOP values are greater than 10.")
-#     else:
-#         print("Assertion passed: All rows have GPS_HDOP values less than 10.")
-    
-#     print("Ran Assertion #9 successfully")
+    def update_trip(conn, df):
+        """
+        Here we are going save the dataframe in memory 
+        and use copy_from() to copy it to the table
+        """
+        # save dataframe to an in memory buffer
+        buffer = StringIO()
 
-# #############################################
-# #                                           #
-# #             Data Transformation           #
-# #                                           #
-# #############################################
-#     # Convert OPD_DATE to datetime
-#     df['NEW_OPD_DATE'] = pd.to_datetime(
-#         df['OPD_DATE'], format='%d%b%Y:%H:%M:%S')
+        df.to_csv(buffer, index=False, header=False)
+        buffer.seek(0)
 
-#     # Extract day of the week
-#     df['DAY_OF_WEEK'] = df['NEW_OPD_DATE'].dt.dayofweek
+        cursor = conn.cursor()
+        try:
+            for index, row in df.iterrows():
+                trip_id = row['trip_id']
+                route_id = row['route_id']
+                direction = row['direction']
+                # Execute the update query
+                cursor.execute("""
+                    UPDATE trip
+                    SET route_id = %s, direction = %s
+                    WHERE trip_id = %s
+                """, (route_id, direction, trip_id))
+                conn.commit()
+        except (Exception, psycopg2.DatabaseError) as error:
+            print("Error: %s" % error)
+            conn.rollback()
+            cursor.close()
+            return 1
+        print("Update of Trip table completed")
+        cursor.close()
 
-#     # Map day of the week to name
-#     day_names = {0: 'Weekday', 1: 'Weekday', 2: 'Weekday',
-#                  3: 'Weekday', 4: 'Weekday', 5: 'Saturday', 6: 'Sunday'}
-#     df['DAY_NAME'] = df['DAY_OF_WEEK'].map(day_names)
+    copy_from_stop(conn, df)
+    update_trip(conn, df)
 
-#     result_df = df.drop_duplicates(subset=['EVENT_NO_TRIP'], keep='first')
-    
-#     # Define function to create timestamp
-#     def create_timestamp(row):
-#         opd_date = datetime.strptime(row['OPD_DATE'], '%d%b%Y:%H:%M:%S')
-#         act_time = timedelta(seconds=row['ACT_TIME'])
-#         timestamp = opd_date + act_time
-#         return pd.Timestamp(timestamp)
 
-#     # Apply the function to create the TIMESTAMP column
-#     df['TIMESTAMP'] = df.apply(create_timestamp, axis=1)
 
-#     df.sort_values(by=['EVENT_NO_TRIP', 'TIMESTAMP',
-#                    'VEHICLE_ID'], inplace=True)
+"""
+create table Trip (
+        trip_id integer,
+        route_id integer,
+        vehicle_id integer,
+        service_key service_type,
+        direction tripdir_type,
+        PRIMARY KEY (trip_id)
+);
 
-#     df['SPEED'] = df.groupby('EVENT_NO_TRIP')['METERS'].diff(
-#     ) / df.groupby('EVENT_NO_TRIP')['ACT_TIME'].diff()
+create table BreadCrumb (
+        tstamp timestamp,
+        latitude float,
+        longitude float,
+        speed float,
+        trip_id integer,
+        FOREIGN KEY (trip_id) REFERENCES Trip
+);
 
-#     # Backfill to handle the first record of each trip
-#     df['SPEED'] = df['SPEED'].fillna(method='bfill')
-
-#     df['SPEED'] = df['SPEED'].clip(lower=0)  # No negative speeds
-
-#     df['GPS_LATITUDE'] = df['GPS_LATITUDE'].fillna(0.0)
-
-#     df['GPS_LONGITUDE'] = df['GPS_LONGITUDE'].fillna(0.0)
-
-#     # Add dummy columns with default value
-#     result_df['ROUTE_ID'] = 0
-#     result_df['DIRECTION'] = 'NotDefined'
-
-#     # Select only required columns and rename them
-#     df_trip = result_df[['EVENT_NO_TRIP', 'ROUTE_ID', 'VEHICLE_ID', 'DAY_NAME', 'DIRECTION']].rename(
-#         columns={'EVENT_NO_TRIP': 'trip_id', 'ROUTE_ID': 'route_id', 'VEHICLE_ID': 'vehicle_id', 'DAY_NAME': 'service_key', 'DIRECTION': 'direction'})
-
-#     # Select only required columns and rename them
-#     df_breadcrumb = df[['TIMESTAMP', 'GPS_LATITUDE', 'GPS_LONGITUDE', 'SPEED', 'EVENT_NO_TRIP']].rename(
-#         columns={'TIMESTAMP': 'tstamp', 'GPS_LATITUDE': 'latitude', 'GPS_LONGITUDE': 'longitude', 'SPEED': 'speed', 'EVENT_NO_TRIP': 'trip_id'})
-
-#     # Assuming you have a DataFrame called df with columns: 'TIMESTAMP', 'SPEED', and 'VEHICLE_ID'
-
-#     # Create a new column for the day of the week
-#     df['DAY_OF_WEEK'] = df['TIMESTAMP'].dt.dayofweek
-
-#     # Map day of the week to 'Weekday' or 'Weekend'
-#     df['DAY_TYPE'] = df['DAY_OF_WEEK'].map({0: 'Weekend', 1: 'Weekday', 2: 'Weekday', 3: 'Weekday', 4: 'Weekday', 5: 'Weekday', 6: 'Weekend'})
-
-#     # Calculate average speed for each day of the week
-#     avg_speed_per_day = df.groupby(['DAY_TYPE', 'DAY_OF_WEEK'])['SPEED'].mean().reset_index()
-
-#     # Display average speed for each day of the week
-#     print(f"The average spped of the day for summary assertion: {avg_speed_per_day}")
-#     print("Ran Assertion #10 successfully")
-# #############################################
-# #                                           #
-# #             Data Storage                  #
-# #                                           #
-# #############################################
-
-#     # Establish a connection to the database
-#     conn = psycopg2.connect(
-#         host="localhost",
-#         database=DBname,
-#         user=DBuser,
-#         password=DBpwd
-#     )
-
-#     def copy_from_trip(conn, df):
-#         """
-#         Here we are going save the dataframe in memory 
-#         and use copy_from() to copy it to the table
-#         """
-#         # save dataframe to an in memory buffer
-#         buffer = StringIO()
-#         df.to_csv(buffer, index=False, header=False)
-#         buffer.seek(0)
-
-#         cursor = conn.cursor()
-#         try:
-#             cursor.copy_from(buffer, 'trip', sep=",")
-#             conn.commit()
-#         except (Exception, psycopg2.DatabaseError) as error:
-#             print("Error: %s" % error)
-#             conn.rollback()
-#             cursor.close()
-#             return 1
-#         print("Loading of Trip table completed")
-#         cursor.close()
-
-#     def copy_from_breadcrumb(conn, df):
-#         """
-#         Here we are going save the dataframe in memory 
-#         and use copy_from() to copy it to the table
-#         """
-#         # save dataframe to an in memory buffer
-#         buffer = StringIO()
-
-#         df.to_csv(buffer, index=False, header=False)
-#         buffer.seek(0)
-
-#         cursor = conn.cursor()
-#         try:
-#             cursor.copy_from(buffer, 'breadcrumb', sep=",")
-#             conn.commit()
-#         except (Exception, psycopg2.DatabaseError) as error:
-#             print("Error: %s" % error)
-#             conn.rollback()
-#             cursor.close()
-#             return 1
-#         print("Loading of breadcrumb table completed")
-#         cursor.close()
-
-#     copy_from_trip(conn, df_trip)
-#     copy_from_breadcrumb(conn, df_breadcrumb)
+create table Stop (
+        vehicle_number integer,
+        trip_id integer,
+        stop_time timestamp,
+        leave_time timestamp,
+        arrive_time timestamp,
+        route_id integer,
+        direction  tripdir_type,
+        service_key service_type,
+        maximum_speed float,
+        train_mileage float, 
+        dwell integer,
+        location_id integer,
+        lift integer,
+        ons integer,
+        offs integer,
+        estimated_load integer,
+        FOREIGN KEY (trip_id) REFERENCES Trip
+);
+"""
